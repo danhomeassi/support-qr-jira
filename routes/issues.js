@@ -251,14 +251,76 @@ router.put('/:id', authenticate, async (req, res) => {
       }
     }
 
-    // Build change description for audit
-    const changes = [];
-    if (status && status !== existing.status) changes.push(`Status: ${existing.status} → ${status}`);
-    if (priority && priority !== existing.priority) changes.push(`Priority: ${existing.priority} → ${priority}`);
-    if (assigned_to !== undefined && assigned_to !== existing.assigned_to) changes.push('Assignee changed');
+    // Build detailed change log — one audit entry per field changed
+    const logChange = db.prepare(
+      'INSERT INTO audit_log (issue_id, user_id, action, details) VALUES (?, ?, ?, ?)'
+    );
+    const resolveUser = (id) => {
+      if (!id) return 'Unassigned';
+      const u = db.prepare('SELECT full_name FROM users WHERE id = ?').get(id);
+      return u?.full_name || `User #${id}`;
+    };
+    const resolveCustomer = (id) => {
+      if (!id) return 'None';
+      const c = db.prepare('SELECT name FROM customers WHERE id = ?').get(id);
+      return c?.name || `Customer #${id}`;
+    };
 
-    db.prepare('INSERT INTO audit_log (issue_id, user_id, action, details) VALUES (?, ?, ?, ?)')
-      .run(req.params.id, req.user.id, 'updated', changes.join('; ') || 'Issue updated');
+    const newTitle = title ?? existing.title;
+    const newDesc = description ?? existing.description;
+    const newStatus = status ?? existing.status;
+    const newPriority = priority ?? existing.priority;
+    const newType = issue_type ?? existing.issue_type;
+    const newCust = customer_id ?? existing.customer_id;
+    const newPart = part_affected ?? existing.part_affected;
+    const newUnit = unit_affected ?? existing.unit_affected;
+    const newEC = engineering_change ?? existing.engineering_change;
+    const newAssignee = assigned_to ?? existing.assigned_to;
+
+    let changeCount = 0;
+    if (newTitle !== existing.title) {
+      logChange.run(req.params.id, req.user.id, 'field_changed', `Title changed from "${existing.title}" to "${newTitle}"`);
+      changeCount++;
+    }
+    if (newDesc !== existing.description) {
+      logChange.run(req.params.id, req.user.id, 'field_changed', 'Description updated');
+      changeCount++;
+    }
+    if (newStatus !== existing.status) {
+      logChange.run(req.params.id, req.user.id, 'status_changed', `Status changed from "${existing.status}" to "${newStatus}"`);
+      changeCount++;
+    }
+    if (newPriority !== existing.priority) {
+      logChange.run(req.params.id, req.user.id, 'field_changed', `Priority changed from "${existing.priority}" to "${newPriority}"`);
+      changeCount++;
+    }
+    if (newType !== existing.issue_type) {
+      logChange.run(req.params.id, req.user.id, 'field_changed', `Type changed from "${existing.issue_type || 'None'}" to "${newType || 'None'}"`);
+      changeCount++;
+    }
+    if (String(newCust || '') !== String(existing.customer_id || '')) {
+      logChange.run(req.params.id, req.user.id, 'field_changed', `Customer changed from "${resolveCustomer(existing.customer_id)}" to "${resolveCustomer(newCust)}"`);
+      changeCount++;
+    }
+    if (newPart !== existing.part_affected) {
+      logChange.run(req.params.id, req.user.id, 'field_changed', `Part Affected changed from "${existing.part_affected || 'None'}" to "${newPart || 'None'}"`);
+      changeCount++;
+    }
+    if (newUnit !== existing.unit_affected) {
+      logChange.run(req.params.id, req.user.id, 'field_changed', `Unit Affected changed from "${existing.unit_affected || 'None'}" to "${newUnit || 'None'}"`);
+      changeCount++;
+    }
+    if (newEC !== existing.engineering_change) {
+      logChange.run(req.params.id, req.user.id, 'field_changed', `Engineering Change changed from "${existing.engineering_change || 'None'}" to "${newEC || 'None'}"`);
+      changeCount++;
+    }
+    if (String(newAssignee || '') !== String(existing.assigned_to || '')) {
+      logChange.run(req.params.id, req.user.id, 'assigned', `Assigned to changed from "${resolveUser(existing.assigned_to)}" to "${resolveUser(newAssignee)}"`);
+      changeCount++;
+    }
+    if (changeCount === 0) {
+      logChange.run(req.params.id, req.user.id, 'updated', 'Issue updated (no field changes detected)');
+    }
 
     // Send close email
     if (isClosing) {

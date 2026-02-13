@@ -73,4 +73,33 @@ router.delete('/:issueId/comments/:id', authenticate, (req, res) => {
   }
 });
 
+// GET /api/issues/:issueId/activity — combined comments + audit log
+router.get('/:issueId/activity', authenticate, (req, res) => {
+  try {
+    const comments = db.prepare(`
+      SELECT c.id, 'comment' as type, c.content, c.created_at,
+        u.full_name, u.username, c.user_id
+      FROM comments c
+      JOIN users u ON c.user_id = u.id
+      WHERE c.issue_id = ?
+    `).all(req.params.issueId);
+
+    const auditEntries = db.prepare(`
+      SELECT a.id, 'activity' as type, a.action, a.details as content, a.created_at,
+        u.full_name, u.username, a.user_id
+      FROM audit_log a
+      LEFT JOIN users u ON a.user_id = u.id
+      WHERE a.issue_id = ?
+    `).all(req.params.issueId);
+
+    // Merge and sort chronologically
+    const combined = [...comments, ...auditEntries]
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+
+    res.json(combined);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

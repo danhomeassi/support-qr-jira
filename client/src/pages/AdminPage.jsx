@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import Modal from '../components/Modal';
 import api from '../services/api';
 
-const TABS = ['Users', 'Customers', 'Dropdowns', 'Custom Fields'];
+const TABS = ['Users', 'Customers', 'Dropdowns', 'Custom Fields', 'Backup'];
 
 export default function AdminPage() {
   const { user } = useAuth();
@@ -35,6 +35,7 @@ export default function AdminPage() {
       {tab === 'Customers' && <CustomersTab />}
       {tab === 'Dropdowns' && <DropdownsTab />}
       {tab === 'Custom Fields' && <CustomFieldsTab />}
+      {tab === 'Backup' && <BackupTab />}
     </div>
   );
 }
@@ -436,6 +437,115 @@ function CustomFieldsTab() {
         </form>
       </Modal>
     </>
+  );
+}
+
+/* ────────── Backup Tab ────────── */
+function BackupTab() {
+  const [stats, setStats] = useState(null);
+  const [restoring, setRestoring] = useState(false);
+  const [message, setMessage] = useState(null);
+  const fileInput = useState(null);
+
+  const loadStats = () => {
+    api.get('/admin/backup/status').then(r => setStats(r.data));
+  };
+  useEffect(() => { loadStats(); }, []);
+
+  const handleDownloadDB = () => {
+    const token = localStorage.getItem('token');
+    window.open(`/api/admin/backup?token=${token}`, '_blank');
+  };
+
+  const handleDownloadJSON = () => {
+    const token = localStorage.getItem('token');
+    window.open(`/api/admin/backup/json?token=${token}`, '_blank');
+  };
+
+  const handleRestore = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!confirm('This will REPLACE all existing data with the backup. Are you sure?')) {
+      e.target.value = '';
+      return;
+    }
+
+    setRestoring(true);
+    setMessage(null);
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await api.post('/admin/restore/json', formData);
+      setMessage({ type: 'success', text: `Restore complete: ${res.data.counts.issues} issues, ${res.data.counts.users} users, ${res.data.counts.customers} customers, ${res.data.counts.comments} comments` });
+      loadStats();
+    } catch (err) {
+      setMessage({ type: 'error', text: err.response?.data?.error || 'Restore failed' });
+    } finally {
+      setRestoring(false);
+      e.target.value = '';
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {message && (
+        <div className={`rounded-lg p-4 text-sm ${message.type === 'success' ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400'}`}>
+          {message.text}
+        </div>
+      )}
+
+      {/* Database stats */}
+      <div className="rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+        <h3 className="mb-4 text-sm font-semibold text-gray-700 dark:text-gray-300">Database Status</h3>
+        {stats && (
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+            <div><p className="text-xs text-gray-500">Users</p><p className="text-lg font-bold text-gray-900 dark:text-white">{stats.users}</p></div>
+            <div><p className="text-xs text-gray-500">Customers</p><p className="text-lg font-bold text-gray-900 dark:text-white">{stats.customers}</p></div>
+            <div><p className="text-xs text-gray-500">Issues</p><p className="text-lg font-bold text-gray-900 dark:text-white">{stats.issues}</p></div>
+            <div><p className="text-xs text-gray-500">Comments</p><p className="text-lg font-bold text-gray-900 dark:text-white">{stats.comments}</p></div>
+            <div><p className="text-xs text-gray-500">Attachments</p><p className="text-lg font-bold text-gray-900 dark:text-white">{stats.attachments}</p></div>
+            <div><p className="text-xs text-gray-500">DB Size</p><p className="text-lg font-bold text-gray-900 dark:text-white">{stats.db_size_mb} MB</p></div>
+          </div>
+        )}
+      </div>
+
+      {/* Backup */}
+      <div className="rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+        <h3 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-300">Download Backup</h3>
+        <p className="mb-4 text-sm text-gray-500 dark:text-gray-400">
+          Download a backup of your data regularly. On Render's free tier the database resets on each deploy, so keep backups safe.
+        </p>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <button onClick={handleDownloadJSON}
+            className="rounded-lg bg-accent-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-accent-700">
+            Download JSON Backup
+          </button>
+          <button onClick={handleDownloadDB}
+            className="rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700">
+            Download SQLite File
+          </button>
+        </div>
+        <p className="mt-3 text-xs text-gray-400">
+          JSON backup is recommended — it's portable and can be restored on any fresh instance.
+          The SQLite file is a direct copy of the database.
+        </p>
+      </div>
+
+      {/* Restore */}
+      <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-6 dark:border-amber-800 dark:bg-amber-900/10">
+        <h3 className="mb-2 text-sm font-semibold text-amber-700 dark:text-amber-400">Restore from Backup</h3>
+        <p className="mb-4 text-sm text-amber-600 dark:text-amber-400">
+          Upload a JSON backup file to restore all data. This will replace all current data.
+          Uploaded file attachments are not included in JSON backups.
+        </p>
+        <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border border-amber-300 bg-white px-4 py-2.5 text-sm font-medium text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400 ${restoring ? 'opacity-50 pointer-events-none' : ''}`}>
+          {restoring ? 'Restoring...' : 'Upload JSON Backup'}
+          <input type="file" accept=".json" className="hidden" onChange={handleRestore} disabled={restoring} />
+        </label>
+      </div>
+    </div>
   );
 }
 

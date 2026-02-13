@@ -27,7 +27,7 @@ export default function IssueDetailPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [issue, setIssue] = useState(null);
-  const [comments, setComments] = useState([]);
+  const [activity, setActivity] = useState([]);
   const [attachments, setAttachments] = useState([]);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({});
@@ -43,11 +43,11 @@ export default function IssueDetailPage() {
   const load = () => {
     Promise.all([
       api.get(`/issues/${id}`),
-      api.get(`/issues/${id}/comments`),
+      api.get(`/issues/${id}/activity`),
       api.get(`/issues/${id}/attachments`),
-    ]).then(([i, c, a]) => {
+    ]).then(([i, act, a]) => {
       setIssue(i.data);
-      setComments(c.data);
+      setActivity(act.data);
       setAttachments(a.data);
       setForm({
         title: i.data.title, description: i.data.description || '',
@@ -104,9 +104,11 @@ export default function IssueDetailPage() {
     e.preventDefault();
     if (!commentText.trim()) return;
     try {
-      const res = await api.post(`/issues/${id}/comments`, { content: commentText });
-      setComments([...comments, res.data]);
+      await api.post(`/issues/${id}/comments`, { content: commentText });
       setCommentText('');
+      // Refresh activity feed to include new comment + its audit entry
+      const res = await api.get(`/issues/${id}/activity`);
+      setActivity(res.data);
     } catch (err) {
       alert('Failed to add comment');
     }
@@ -116,7 +118,7 @@ export default function IssueDetailPage() {
     if (!confirm('Delete this comment?')) return;
     try {
       await api.delete(`/issues/${id}/comments/${commentId}`);
-      setComments(comments.filter(c => c.id !== commentId));
+      setActivity(activity.filter(a => !(a.type === 'comment' && a.id === commentId)));
     } catch (err) {
       alert('Failed to delete comment');
     }
@@ -232,37 +234,64 @@ export default function IssueDetailPage() {
             </div>
           )}
 
-          {/* Comments */}
+          {/* Activity Feed */}
           <div className="rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
             <h2 className="mb-4 text-sm font-semibold text-gray-700 dark:text-gray-300">
-              Comments ({comments.length})
+              Activity ({activity.length})
             </h2>
-            <div className="space-y-4">
-              {comments.map(c => (
-                <div key={c.id} className="rounded-lg border border-gray-100 p-4 dark:border-gray-700">
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent-100 text-xs font-bold text-accent-700 dark:bg-accent-900/30 dark:text-accent-400">
-                        {c.full_name?.charAt(0)}
-                      </span>
-                      <span className="text-sm font-medium text-gray-900 dark:text-white">{c.full_name}</span>
-                      <span className="text-xs text-gray-400">@{c.username}</span>
+            <div className="space-y-3">
+              {activity.map((item, idx) => (
+                item.type === 'comment' ? (
+                  /* Comment */
+                  <div key={`c-${item.id}`} className="rounded-lg border border-gray-100 p-4 dark:border-gray-700">
+                    <div className="mb-2 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent-100 text-xs font-bold text-accent-700 dark:bg-accent-900/30 dark:text-accent-400">
+                          {item.full_name?.charAt(0)}
+                        </span>
+                        <span className="text-sm font-medium text-gray-900 dark:text-white">{item.full_name}</span>
+                        <span className="text-xs text-gray-400">@{item.username}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-400">
+                          {new Date(item.created_at).toLocaleString()}
+                        </span>
+                        {(item.user_id === user?.id || user?.role === 'admin') && (
+                          <button onClick={() => handleDeleteComment(item.id)}
+                            className="text-xs text-red-400 hover:text-red-600">Delete</button>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-gray-400">
-                        {new Date(c.created_at).toLocaleString()}
-                      </span>
-                      {(c.user_id === user?.id || user?.role === 'admin') && (
-                        <button onClick={() => handleDeleteComment(c.id)}
-                          className="text-xs text-red-400 hover:text-red-600">Delete</button>
+                    <p className="whitespace-pre-wrap text-sm text-gray-600 dark:text-gray-400">{item.content}</p>
+                  </div>
+                ) : (
+                  /* Activity / audit log entry */
+                  <div key={`a-${item.id}`} className="flex items-start gap-3 py-2">
+                    <div className="mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-700">
+                      {item.action === 'created' ? (
+                        <svg className="h-3.5 w-3.5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                      ) : item.action === 'status_changed' ? (
+                        <svg className="h-3.5 w-3.5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                      ) : item.action === 'assigned' ? (
+                        <svg className="h-3.5 w-3.5 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+                      ) : item.action === 'commented' ? (
+                        <svg className="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" /></svg>
+                      ) : (
+                        <svg className="h-3.5 w-3.5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                       )}
                     </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm text-gray-600 dark:text-gray-400">
+                        <span className="font-medium text-gray-900 dark:text-white">{item.full_name || 'System'}</span>
+                        {' '}{item.content}
+                      </p>
+                      <p className="text-xs text-gray-400">{new Date(item.created_at).toLocaleString()}</p>
+                    </div>
                   </div>
-                  <p className="whitespace-pre-wrap text-sm text-gray-600 dark:text-gray-400">{c.content}</p>
-                </div>
+                )
               ))}
-              {comments.length === 0 && (
-                <p className="text-sm text-gray-400">No comments yet</p>
+              {activity.length === 0 && (
+                <p className="text-sm text-gray-400">No activity yet</p>
               )}
             </div>
 
